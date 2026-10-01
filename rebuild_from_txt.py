@@ -15,6 +15,7 @@ import re
 import shutil
 import sys
 import datetime
+import difflib
 
 BASE = "."
 LETTERS = "กขคงจฉช"
@@ -96,6 +97,62 @@ def parse_question_blocks(text):
     if cur:
         blocks.append(cur)
     return blocks
+
+
+def _text_of(parts):
+    return " ".join(parts)
+
+
+def _same_question(a, b):
+    """True when two blocks hold the same question (OCR duplicated the line).
+
+    Compared on the question stem: the duplicated copies often carry different
+    option sets (ชุด 2 ข้อ 167 exists once with 3 options and once with 5), so the
+    full text can differ a lot while the question is the same.
+    """
+    if a == b or a in b or b in a:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.9
+
+
+OPTION_LINE = re.compile(r"^[ก-ฮ][\.\)]\s*\S")
+
+
+def _option_count(parts):
+    return sum(1 for p in parts if OPTION_LINE.match(p.strip()))
+
+
+def repair_numbering(blocks):
+    """Fix question numbers mangled by the scan/OCR.
+
+    Two failure modes appear in this corpus:
+      * a misread final digit — ชุด 5 prints 157 as "153" and 167 as "163", so the
+        number goes backwards in an otherwise ascending run; the run itself shows
+        the intended number (previous + 1);
+      * a duplicated line — the same question printed twice (ชุด 1 ข้อ 285, ชุด 2
+        ข้อ 167/290, ชุด 4 ข้อ 331); keep the copy that carries the most options.
+    A number repeated after a one-number gap (ชุด 4 "267 268 268 270") means the
+    first of the pair owns the missing number.
+    """
+    out = []
+    expected = 1
+    for i, (raw, parts) in enumerate(blocks):
+        if out and raw < expected:
+            keep_stem, keep_parts = out[-1]
+            if _same_question(parts[0], keep_parts[0]):
+                if (_option_count(parts), len(_text_of(parts))) > (
+                        _option_count(keep_parts), len(_text_of(keep_parts))):
+                    out[-1] = (keep_stem, parts)      # keep the fuller copy
+                continue
+            assigned = expected                       # misread digit
+        elif raw > expected:
+            nxt = blocks[i + 1][0] if i + 1 < len(blocks) else None
+            assigned = expected if (nxt == raw and out) else raw
+        else:
+            assigned = raw
+        out.append((assigned, parts))
+        expected = assigned + 1
+    return out
 
 
 def option_markers(text, sep):
@@ -183,11 +240,12 @@ def build():
         qpart, kpart = cut_key_section(text)
         if not kpart and n in FALLBACK_KEY_FILES:
             kpart = cut_key_section(read_txt(f"{BASE}/{FALLBACK_KEY_FILES[n]}"))[1]
-        blocks = parse_question_blocks(qpart)
+        blocks = repair_numbering(parse_question_blocks(qpart))
         answers = parse_answers(kpart)
         per = {"questions": 0, "with_key": 0, "no_key": 0, "short_options": 0}
         for num, parts in blocks:
             stem, opts = split_question(parts)
+            stem = re.sub(r"^[\.\)\s]+", "", stem)      # stray "." from the scan
             letter = answers.get(num, KEY_OVERRIDES.get((n, num)))
             letters = [o[0] for o in opts]
             ans = [letter] if letter and letter in letters else []
@@ -220,7 +278,7 @@ def main():
     if dry:
         return
     json_path = f"{BASE}/all_questions.json"
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     shutil.copyfile(json_path, f"{json_path}.bak-{stamp}")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
