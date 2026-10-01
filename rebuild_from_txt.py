@@ -46,6 +46,12 @@ FALLBACK_KEY_FILES = {
     1: "../ตัวอย่างข้อสอบเล่มสีเขียว 1-5/ตัวอย่างข้อสอบเล่มสีเขียว ชุดที่ 1.txt",
 }
 
+# Keys read by eye off the scanned key page where the OCR text is missing them.
+# (source, question number) -> letter. Keep this list short and sourced.
+KEY_OVERRIDES = {
+    (4, 310): "ค",   # PDF ชุดที่ 4 หน้า 46: "309) ข.  310) ค." — the txt dropped it
+}
+
 
 def is_noise(line):
     s = line.strip()
@@ -137,16 +143,36 @@ def parse_answers(key_part):
     Two layouts appear in the sources:
         "1) ก.  2) ข."      (sets 2-5)
         "1 ก.   2 ก."       (set 1)
+    Both are scan-derived, so two quirks must be handled:
+      * a letter can be missing entirely where the book printed a blank
+        (e.g. ชุด 2 ข้อ 191, ชุด 4 ข้อ 173) — those questions stay keyless;
+      * the book misprints question 316 as a second "315" (ชุด 3, 4, 5), so an
+        immediately repeated number is read as the next question number.
     """
     if not key_part:
         return {}
-    paren = {}
-    for m in re.finditer(r"(\d{1,4})\s*[\)\.]\s*([ก-จ])\s*\.?(?![ก-ฮ])", key_part):
-        paren.setdefault(int(m.group(1)), m.group(2))
-    bare = {}
-    for m in re.finditer(r"(?:^|\s)(\d{1,4})\s*([ก-จ])\s*\.?(?![ก-ฮ])", key_part):
-        bare.setdefault(int(m.group(1)), m.group(2))
-    return bare if len(bare) > len(paren) else paren
+
+    def scan(pattern):
+        raw = [(int(m.group(1)), m.group(2)) for m in re.finditer(pattern, key_part)]
+        out = {}
+        last = 0
+        for i, (num, letter) in enumerate(raw):
+            if num < last:              # page footer noise (phone numbers, addresses)
+                continue
+            if num == last:             # number printed twice in the source
+                nxt = raw[i + 1][0] if i + 1 < len(raw) else None
+                if nxt == num + 2:      # book misprint: "315) ง. 315) ค. 317)"
+                    out[num + 1] = letter      # -> the second one is question 316
+                    last = num + 1
+                # otherwise it is a duplicated OCR line: drop it
+                continue
+            out[num] = letter
+            last = num
+        return out
+
+    paren = scan(r"(?<!\d)(\d{1,4})\s*[\)\.]\s*([ก-จ])(?![ก-ฮ])")
+    bare = scan(r"(?<!\d)(\d{1,4})\s*([ก-จ])\s*\.?(?![ก-ฮ])")
+    return paren if len(paren) >= len(bare) else bare
 
 
 def build():
@@ -162,7 +188,7 @@ def build():
         per = {"questions": 0, "with_key": 0, "no_key": 0, "short_options": 0}
         for num, parts in blocks:
             stem, opts = split_question(parts)
-            letter = answers.get(num)
+            letter = answers.get(num, KEY_OVERRIDES.get((n, num)))
             letters = [o[0] for o in opts]
             ans = [letter] if letter and letter in letters else []
             if letter:
