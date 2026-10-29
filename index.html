@@ -55,7 +55,7 @@
 <div class="wrap">
   <header>
     <h1>คลังข้อสอบเภสัชกรรมไทย</h1>
-    <p>สุ่มข้อสอบจากทั้ง 5 ชุด · <span id="total-count"></span> ข้อ · แยก 6 บท</p>
+    <p>สุ่มข้อสอบจากทั้ง 5 ชุด · <span id="total-count"></span> ข้อ · แยก 6 บท · ตรงตัวกรอง <span id="pool-count">0</span> ข้อ</p>
   </header>
 
   <div class="toolbar">
@@ -111,6 +111,8 @@ function getPool() {
   const s = parseInt(document.getElementById('src-select').value, 10);
   const c = parseInt(document.getElementById('ch-select').value, 10);
   pool = ALL.filter(q => (s === 0 || q.source === s) && (c === 0 || q.chapter === c));
+  const pc = document.getElementById('pool-count');
+  if (pc) pc.textContent = pool.length;
 }
 
 function resetAndStart() {
